@@ -52,7 +52,7 @@ function nodeMuteSet(id, muted, callback) {
 
 // Shared helper: parse pw-dump once, extract app streams, sinks, and sources
 function parsePwDump(callback) {
-  exec("pw-dump", (err, stdout) => {
+  exec("pw-dump", { maxBuffer: 99999999 }, (err, stdout) => {
     if (err) return callback([], [], []);
 
     try {
