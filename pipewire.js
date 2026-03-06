@@ -50,10 +50,26 @@ function nodeMuteSet(id, muted, callback) {
 
 // --- pw-dump based enumeration ---
 
-// Shared helper: parse pw-dump once, extract app streams, sinks, and sources
+// Shared helper: parse pw-dump once, extract app streams, sinks, and sources.
+// Concurrent calls are queued and share a single pw-dump execution.
+let pwDumpQueue = null;
+
 function parsePwDump(callback) {
-  exec("pw-dump", { maxBuffer: 99999999 }, (err, stdout) => {
-    if (err) return callback([], [], []);
+  if (pwDumpQueue) {
+    pwDumpQueue.push(callback);
+    return;
+  }
+
+  pwDumpQueue = [callback];
+
+  exec("pw-dump", { maxBuffer: 25000000 }, (err, stdout) => {
+    const queue = pwDumpQueue;
+    pwDumpQueue = null;
+
+    if (err) {
+      for (const cb of queue) cb([], [], []);
+      return;
+    }
 
     try {
       const nodes = JSON.parse(stdout);
@@ -87,10 +103,10 @@ function parsePwDump(callback) {
         }
       }
 
-      callback(apps, sinks, sources);
+      for (const cb of queue) cb(apps, sinks, sources);
     } catch (e) {
       console.error("Failed to parse pw-dump output:", e.message);
-      callback([], [], []);
+      for (const cb of queue) cb([], [], []);
     }
   });
 }

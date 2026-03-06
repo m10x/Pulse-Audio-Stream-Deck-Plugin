@@ -695,22 +695,38 @@ function handleDialPress(action, context, settings) {
 }
 
 // --- Push-to-talk press/release ---
+function syncPTTState(inputName, active) {
+  if (!inputName) return;
+  for (const c of contexts.values()) {
+    if (c.short !== "pushtotalk") continue;
+    if ((c.settings && c.settings.inputName) !== inputName) continue;
+    c.pttActive = active;
+    setPTTImage(c, active);
+  }
+}
+
 function handlePTTPress(context) {
   const ctx = contexts.get(context);
   if (!ctx) return;
-  ctx.pttActive = true;
-  const target = resolveTarget("pushtotalk", ctx, ctx.settings);
-  if (target) pipewire.nodeMuteSet(target, false, () => {});
-  setPTTImage(ctx, true);
+  const inputName = ctx.settings && ctx.settings.inputName;
+  syncPTTState(inputName, true);
+  if (!inputName) return;
+  pipewire.resolveSourceId(inputName, (id) => {
+    ctx.resolvedPTTId = id;
+    if (id) pipewire.nodeMuteSet(id, false, () => {});
+  });
 }
 
 function handlePTTRelease(context) {
   const ctx = contexts.get(context);
   if (!ctx) return;
-  ctx.pttActive = false;
-  const target = resolveTarget("pushtotalk", ctx, ctx.settings);
-  if (target) pipewire.nodeMuteSet(target, true, () => {});
-  setPTTImage(ctx, false);
+  const inputName = ctx.settings && ctx.settings.inputName;
+  syncPTTState(inputName, false);
+  if (!inputName) return;
+  pipewire.resolveSourceId(inputName, (id) => {
+    ctx.resolvedPTTId = id;
+    if (id) pipewire.nodeMuteSet(id, true, () => {});
+  });
 }
 
 // --- PipeWire monitor (pactl subscribe) ---
