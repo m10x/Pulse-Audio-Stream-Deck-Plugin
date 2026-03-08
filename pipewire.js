@@ -72,7 +72,10 @@ function parsePwDump(callback) {
     }
 
     try {
-      const nodes = JSON.parse(stdout);
+      const jsonStart = stdout.indexOf("[");
+      const jsonEnd = stdout.lastIndexOf("]");
+      if (jsonStart === -1 || jsonEnd === -1) throw new Error("No JSON array found in pw-dump output");
+      const nodes = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1));
       const apps = [];
       const sinks = [];
       const sources = [];
