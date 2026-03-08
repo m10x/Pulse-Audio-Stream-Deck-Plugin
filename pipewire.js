@@ -73,8 +73,20 @@ function parsePwDump(callback) {
 
     try {
       const jsonStart = stdout.indexOf("[");
-      const jsonEnd = stdout.lastIndexOf("]");
-      if (jsonStart === -1 || jsonEnd === -1) throw new Error("No JSON array found in pw-dump output");
+      if (jsonStart === -1) throw new Error("No JSON array found in pw-dump output");
+      // Walk forward from the opening bracket to find the matching closing bracket,
+      // correctly handling nested arrays/objects and strings with escaped characters.
+      // This is robust against any trailing non-JSON content, even if it contains ']'.
+      let depth = 0, inString = false, escape = false, jsonEnd = -1;
+      for (let i = jsonStart; i < stdout.length; i++) {
+        const c = stdout[i];
+        if (escape) { escape = false; continue; }
+        if (inString) { if (c === "\\") escape = true; else if (c === '"') inString = false; continue; }
+        if (c === '"') { inString = true; continue; }
+        if (c === "[" || c === "{") depth++;
+        else if (c === "]" || c === "}") { if (--depth === 0) { jsonEnd = i; break; } }
+      }
+      if (jsonEnd === -1) throw new Error("No JSON array found in pw-dump output");
       const nodes = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1));
       const apps = [];
       const sinks = [];
