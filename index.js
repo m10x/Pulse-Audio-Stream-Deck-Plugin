@@ -557,11 +557,60 @@ function refreshAllTitles() {
   }
 }
 
+// Fast path: only refresh volume/mute state, skip name resolution and pw-dump.
+// Used for 'change' events where device topology hasn't changed.
+function refreshVolume(ctx) {
+  if (ctx.short === "pushtotalk") return; // PTT state is button-driven, not polled
+  if (ctx.short === "switchoutput" || ctx.short === "switchinput") {
+    // Need to re-check which device is the current default, but can skip name re-lookup
+    const isOutput = ctx.short === "switchoutput";
+    const deviceName = ctx.settings && (isOutput ? ctx.settings.outputName : ctx.settings.inputName);
+    const defaultTarget = isOutput ? "@DEFAULT_AUDIO_SINK@" : "@DEFAULT_AUDIO_SOURCE@";
+    if (!deviceName) return;
+    pipewire.inspectNode(defaultTarget, (info) => {
+      ctx.isActive = !!(info && info.stableName === deviceName);
+      updateDisplay(ctx, null);
+    });
+    return;
+  }
+  if (ctx.short.startsWith("app")) {
+    if (!ctx.resolvedAppIds || ctx.resolvedAppIds.length === 0) return;
+    pipewire.getVolume(ctx.resolvedAppIds[0], (data) => updateDisplay(ctx, data));
+    return;
+  }
+  if (ctx.short.startsWith("output")) {
+    if (!ctx.resolvedOutputId) return;
+    pipewire.getVolume(ctx.resolvedOutputId, (data) => updateDisplay(ctx, data));
+    return;
+  }
+  if (ctx.short.startsWith("input")) {
+    if (!ctx.resolvedInputId) return;
+    pipewire.getVolume(ctx.resolvedInputId, (data) => updateDisplay(ctx, data));
+    return;
+  }
+  const target = getTargetForAction(ctx.short);
+  if (!target) return;
+  pipewire.getVolume(target, (data) => updateDisplay(ctx, data));
+}
+
+function refreshAllVolumes() {
+  for (const ctx of contexts.values()) {
+    refreshVolume(ctx);
+  }
+}
+
 // --- Shared action callback: refresh display after a short delay ---
 function afterAction(context) {
   setTimeout(() => {
     const ctx = contexts.get(context);
-    if (ctx) refreshTitle(ctx);
+    if (!ctx) return;
+    // Switch actions change the active default, so need full re-resolution.
+    // All other actions only change volume/mute state, so use the fast path.
+    if (ctx.short === "switchoutput" || ctx.short === "switchinput") {
+      refreshTitle(ctx);
+    } else {
+      refreshVolume(ctx);
+    }
   }, 50);
 }
 
@@ -732,17 +781,29 @@ function handlePTTRelease(context) {
 // --- PipeWire monitor (pactl subscribe) ---
 let monitor = null;
 let debounceTimer = null;
+let pendingStructural = false;
 
 function startMonitor() {
   monitor = spawn("pactl", ["subscribe"], { stdio: ["ignore", "pipe", "ignore"] });
 
-  monitor.stdout.on("data", () => {
+  monitor.stdout.on("data", (chunk) => {
+    // Distinguish structural changes (device added/removed) from state-only changes
+    // (volume/mute updates). Only structural changes need full re-resolution with name
+    // lookups and pw-dump; state-only changes just need a getVolume call per context.
+    if (/Event '(new|remove)'/.test(chunk.toString())) {
+      pendingStructural = true;
+    }
     // Debounce: coalesce rapid events into a single refresh
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      refreshAllTitles();
-      pushAppListToOpenPIs();
-    }, 100);
+      if (pendingStructural) {
+        pendingStructural = false;
+        refreshAllTitles();
+        pushAppListToOpenPIs();
+      } else {
+        refreshAllVolumes();
+      }
+    }, 200);
   });
 
   monitor.on("error", (err) => {
