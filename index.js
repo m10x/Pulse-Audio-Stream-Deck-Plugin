@@ -880,6 +880,28 @@ function cleanup() {
 // --- WebSocket connection ---
 const ws = new WebSocket(`ws://localhost:${port}`);
 
+// OpenDeck may not always replay willAppear after plugin updates/reloads.
+// Recreate a missing action context from any event that carries action/context.
+function ensureContext(action, context, payload) {
+  if (!action || !context) return null;
+
+  const settings = (payload && payload.settings) || {};
+  const controller = (payload && payload.controller) || "Keypad";
+  const existing = contexts.get(context);
+
+  if (existing) {
+    if (payload && payload.settings) existing.settings = settings;
+    if (payload && payload.controller) existing.controller = controller;
+    return existing;
+  }
+
+  const { short, iconType } = actionMeta(action);
+  const ctx = { action, short, iconType, context, settings, controller };
+  contexts.set(context, ctx);
+  refreshTitle(ctx);
+  return ctx;
+}
+
 ws.on("open", () => {
   // Register this plugin with OpenDeck
   send({ event: registerEvent, uuid: pluginUUID });
@@ -920,7 +942,7 @@ ws.on("message", (raw) => {
       break;
 
     case "keyDown": {
-      const kdCtx = contexts.get(context);
+      const kdCtx = ensureContext(action, context, payload) || contexts.get(context);
       if (kdCtx && kdCtx.short === "pushtotalk") {
         handlePTTPress(context);
       } else {
@@ -930,7 +952,7 @@ ws.on("message", (raw) => {
     }
 
     case "keyUp": {
-      const kuCtx = contexts.get(context);
+      const kuCtx = ensureContext(action, context, payload) || contexts.get(context);
       if (kuCtx && kuCtx.short === "pushtotalk") {
         handlePTTRelease(context);
       }
@@ -939,15 +961,17 @@ ws.on("message", (raw) => {
 
     case "didReceiveSettings": {
       const settings = (payload && payload.settings) || {};
-      if (contexts.has(context)) {
-        contexts.get(context).settings = settings;
-        refreshTitle(contexts.get(context));
+      const dsCtx = ensureContext(action, context, payload) || contexts.get(context);
+      if (dsCtx) {
+        dsCtx.settings = settings;
+        refreshTitle(dsCtx);
       }
       break;
     }
 
     case "dialRotate": {
-      if (contexts.has(context)) contexts.get(context).controller = "Encoder";
+      const drCtx = ensureContext(action, context, payload) || contexts.get(context);
+      if (drCtx) drCtx.controller = "Encoder";
       const ticks = (payload && payload.ticks) || 0;
       handleDialRotate(action, context, getSettings(context, payload), ticks);
       break;
@@ -955,7 +979,8 @@ ws.on("message", (raw) => {
 
     case "dialDown":
     case "touchTap": {
-      if (contexts.has(context)) contexts.get(context).controller = "Encoder";
+      const dpCtx = ensureContext(action, context, payload) || contexts.get(context);
+      if (dpCtx) dpCtx.controller = "Encoder";
       handleDialPress(action, context, getSettings(context, payload));
       break;
     }
