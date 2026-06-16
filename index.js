@@ -576,7 +576,8 @@ function refreshVolume(ctx) {
   if (ctx.short.startsWith("app")) {
     resolveAppTargets(ctx, ctx.settings, (ids) => {
       if (!ids || ids.length === 0) {
-        updateDisplay(ctx, null);
+        // During app stream reconfiguration, pw-dump may briefly return no IDs.
+        // Keep the current image/state to avoid a short 0% flicker.
         return;
       }
       pipewire.getVolume(ids[0], (data) => updateDisplay(ctx, data));
