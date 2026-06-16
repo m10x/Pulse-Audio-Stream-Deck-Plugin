@@ -178,6 +178,7 @@ function renderSVG(title, muted, percent, options, L) {
   const showName = options && options.showName !== undefined ? options.showName : true;
   const showPercent = options && options.showPercent !== undefined ? options.showPercent : false;
   const showBar = options && options.showBar !== undefined ? options.showBar : true;
+  const showWarning = options && options.showWarning === true;
   const iconType = options && options.iconType || null;
 
   const fillW = Math.round((percent / 100) * L.barW);
@@ -185,8 +186,12 @@ function renderSVG(title, muted, percent, options, L) {
 
   const bgIcon = (!showName && iconType && L.bgIcons[iconType]) ? L.bgIcons[iconType] : "";
 
-    const muteIcon = muted
+  const muteIcon = muted
     ? `<line x1="10" y1="10" x2="${L.w - 10}" y2="${L.h - 10}" stroke="#e33" stroke-width="4" stroke-linecap="round"/>`
+    : "";
+
+  const warningIcon = showWarning
+    ? `<line x1="10" y1="10" x2="${L.w - 10}" y2="${L.h - 10}" stroke="#ffeb3b" stroke-width="5" stroke-linecap="round"/>`
     : "";
 
   let textBlock = "";
@@ -209,6 +214,7 @@ ${bgIcon}
 ${textBlock}
 ${muteIcon}
 ${barBlock}
+${warningIcon}
 </svg>`;
 }
 
@@ -220,6 +226,7 @@ function renderKeypadSVG(muted, percent, options) {
   const hint = options && options.actionHint;
   const showBar = options && options.showBar !== undefined ? options.showBar : true;
   const showPercent = options && options.showPercent !== undefined ? options.showPercent : false;
+  const showWarning = options && options.showWarning === true;
 
   // Action-specific center icon
   let icon = "";
@@ -257,11 +264,16 @@ function renderKeypadSVG(muted, percent, options) {
     ? `<text x="${CX}" y="132" text-anchor="middle" fill="#fff" font-size="16" font-family="sans-serif" font-weight="bold">${percent}%</text>`
     : "";
 
+  const warningIcon = showWarning
+    ? `<line x1="32" y1="32" x2="112" y2="100" stroke="#ffeb3b" stroke-width="5" stroke-linecap="round"/>`
+    : "";
+
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">
 <rect width="${W}" height="${H}" fill="#000"/>
 ${icon}
 ${bar}
 ${pctText}
+${warningIcon}
 </svg>`;
 }
 
@@ -337,7 +349,7 @@ function displayOpts(ctx) {
   const showName = ctx.settings && ctx.settings.showName !== undefined ? ctx.settings.showName : true;
   const showPercent = ctx.settings && ctx.settings.showPercent !== undefined ? ctx.settings.showPercent : false;
   const showBar = ctx.settings && ctx.settings.showBar !== undefined ? ctx.settings.showBar : true;
-  const opts = { showName, showPercent, showBar, iconType: ctx.iconType };
+  const opts = { showName, showPercent, showBar, iconType: ctx.iconType, showWarning: !!ctx.isUnavailable };
   if (ctx.short === "switchoutput" || ctx.short === "switchinput") {
     opts.barColor = ctx.isActive ? "#4caf50" : "#666";
   }
@@ -379,6 +391,32 @@ function updateDisplay(ctx, data) {
   }
 }
 
+function clearAppUnavailableTimer(ctx) {
+  if (ctx && ctx.appUnavailableTimer) {
+    clearTimeout(ctx.appUnavailableTimer);
+    ctx.appUnavailableTimer = null;
+  }
+}
+
+function scheduleAppUnavailable(ctx) {
+  if (!ctx || ctx.appUnavailableTimer) return;
+  // Debounce unavailable state to avoid warning flicker during short PipeWire update gaps.
+  ctx.appUnavailableTimer = setTimeout(() => {
+    const liveCtx = contexts.get(ctx.context);
+    if (!liveCtx) return;
+    liveCtx.appUnavailableTimer = null;
+    setUnavailable(liveCtx, true);
+    updateDisplay(liveCtx, null);
+  }, 300);
+}
+
+function setUnavailable(ctx, unavailable) {
+  ctx.isUnavailable = !!unavailable;
+  if (!ctx.isUnavailable) {
+    clearAppUnavailableTimer(ctx);
+  }
+}
+
 // --- Refresh display for a context ---
 function refreshTitle(ctx) {
   // For push-to-talk, resolve device and show current PTT state
@@ -402,6 +440,7 @@ function refreshTitle(ctx) {
     const legacyId = ctx.settings && ctx.settings.app;
 
     if (!appName && !legacyId) {
+      setUnavailable(ctx, false);
       ctx.nodeName = "No App";
       ctx.resolvedAppIds = [];
       updateDisplay(ctx, null);
@@ -412,25 +451,43 @@ function refreshTitle(ctx) {
       pipewire.resolveAppIds(appName, (ids) => {
         ctx.resolvedAppIds = ids;
         if (ids.length === 0) {
+          setUnavailable(ctx, true);
           ctx.nodeName = appName;
           updateDisplay(ctx, null);
           return;
         }
         pipewire.getAppName(ids[0], (name) => {
           ctx.nodeName = name || appName;
-          pipewire.getVolume(ids[0], (data) => updateDisplay(ctx, data));
+          pipewire.getVolume(ids[0], (data) => {
+            if (!data) {
+              setUnavailable(ctx, true);
+              updateDisplay(ctx, null);
+              return;
+            }
+            setUnavailable(ctx, false);
+            updateDisplay(ctx, data);
+          });
         });
       });
     } else {
       // Legacy: use numeric ID directly, auto-migrate to appName
       ctx.resolvedAppIds = [legacyId];
       pipewire.inspectNode(legacyId, (info) => {
+        setUnavailable(ctx, !info);
         if (info && info.appName) {
           ctx.settings.appName = info.appName;
           send({ event: "setSettings", context: ctx.context, payload: ctx.settings });
         }
         ctx.nodeName = (info && info.appName) || `ID ${legacyId}`;
-        pipewire.getVolume(legacyId, (data) => updateDisplay(ctx, data));
+        pipewire.getVolume(legacyId, (data) => {
+          if (!data) {
+            setUnavailable(ctx, true);
+            updateDisplay(ctx, null);
+            return;
+          }
+          setUnavailable(ctx, false);
+          updateDisplay(ctx, data);
+        });
       });
     }
     return;
@@ -441,6 +498,7 @@ function refreshTitle(ctx) {
     const inputName = ctx.settings && ctx.settings.inputName;
 
     if (!inputName) {
+      setUnavailable(ctx, false);
       ctx.nodeName = "No Device";
       ctx.resolvedInputId = null;
       updateDisplay(ctx, null);
@@ -449,11 +507,13 @@ function refreshTitle(ctx) {
 
     pipewire.resolveSourceId(inputName, (id) => {
       if (!id) {
+        setUnavailable(ctx, true);
         ctx.nodeName = inputName;
         ctx.resolvedInputId = null;
         updateDisplay(ctx, null);
         return;
       }
+      setUnavailable(ctx, false);
       ctx.resolvedInputId = id;
       pipewire.getNodeName(id, (name) => {
         ctx.nodeName = name || inputName;
@@ -471,6 +531,7 @@ function refreshTitle(ctx) {
     const resolveFn = isOutput ? pipewire.resolveNodeId : pipewire.resolveSourceId;
 
     if (!deviceName) {
+      setUnavailable(ctx, false);
       ctx.nodeName = "No Device";
       ctx.isActive = false;
       ctx.resolvedSwitchId = null;
@@ -482,6 +543,7 @@ function refreshTitle(ctx) {
       ctx.resolvedSwitchId = id;
       // Get display name
       if (id) {
+        setUnavailable(ctx, false);
         pipewire.getNodeName(id, (name) => {
           ctx.nodeName = name || deviceName;
           // Check if this device is the current default
@@ -491,6 +553,7 @@ function refreshTitle(ctx) {
           });
         });
       } else {
+        setUnavailable(ctx, true);
         ctx.nodeName = deviceName;
         ctx.isActive = false;
         updateDisplay(ctx, null);
@@ -505,6 +568,7 @@ function refreshTitle(ctx) {
     const legacyId = ctx.settings && ctx.settings.output;
 
     if (!outputName && !legacyId) {
+      setUnavailable(ctx, false);
       ctx.nodeName = "No Device";
       ctx.resolvedOutputId = null;
       updateDisplay(ctx, null);
@@ -514,11 +578,13 @@ function refreshTitle(ctx) {
     if (outputName) {
       pipewire.resolveNodeId(outputName, (id) => {
         if (!id) {
+          setUnavailable(ctx, true);
           ctx.nodeName = outputName;
           ctx.resolvedOutputId = null;
           updateDisplay(ctx, null);
           return;
         }
+        setUnavailable(ctx, false);
         ctx.resolvedOutputId = id;
         pipewire.getNodeName(id, (name) => {
           ctx.nodeName = name || outputName;
@@ -529,6 +595,7 @@ function refreshTitle(ctx) {
       // Legacy: use numeric ID directly, auto-migrate to node.name
       ctx.resolvedOutputId = legacyId;
       pipewire.inspectNode(legacyId, (info) => {
+        setUnavailable(ctx, !info);
         if (info && info.stableName) {
           ctx.settings.outputName = info.stableName;
           send({ event: "setSettings", context: ctx.context, payload: ctx.settings });
@@ -576,11 +643,17 @@ function refreshVolume(ctx) {
   if (ctx.short.startsWith("app")) {
     resolveAppTargets(ctx, ctx.settings, (ids) => {
       if (!ids || ids.length === 0) {
-        // During app stream reconfiguration, pw-dump may briefly return no IDs.
-        // Keep the current image/state to avoid a short 0% flicker.
+        scheduleAppUnavailable(ctx);
         return;
       }
-      pipewire.getVolume(ids[0], (data) => updateDisplay(ctx, data));
+      pipewire.getVolume(ids[0], (data) => {
+        if (!data) {
+          scheduleAppUnavailable(ctx);
+          return;
+        }
+        setUnavailable(ctx, false);
+        updateDisplay(ctx, data);
+      });
     });
     return;
   }
@@ -934,6 +1007,7 @@ ws.on("message", (raw) => {
     }
 
     case "willDisappear":
+      if (contexts.has(context)) clearAppUnavailableTimer(contexts.get(context));
       contexts.delete(context);
       lastImageCache.delete(context);
       lastTitleCache.delete(context);

@@ -9,6 +9,7 @@ A Stream Deck plugin for controlling PipeWire audio on Linux via [OpenDeck](http
 - Fix Volume Control not working it App is restarted by getting fresh Audio-Stream ID before each action
 - Fix Images not Updating after reinstalling/updating PipeWire Audio Control for OpenDeck
 - Fix inspector not showing fresh app/sink/source list
+- Show if app/sink/source is not available with a yellow strike
 
 ## Features
 
