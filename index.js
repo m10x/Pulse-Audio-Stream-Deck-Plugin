@@ -988,6 +988,12 @@ ws.on("message", (raw) => {
 
     case "propertyInspectorDidAppear":
       openPIs.add(context);
+      // Immediately push current lists on inspector open so stale/legacy actions
+      pipewire.getLists((apps, sinks, sources) => {
+        if (apps.length > 0) sendToPropertyInspector(context, { event: "appList", apps });
+        if (sinks.length > 0) sendToPropertyInspector(context, { event: "sinkList", sinks });
+        if (sources.length > 0) sendToPropertyInspector(context, { event: "sourceList", sources });
+      });
       break;
 
     case "propertyInspectorDidDisappear":
