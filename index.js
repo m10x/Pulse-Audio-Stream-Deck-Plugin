@@ -185,8 +185,8 @@ function renderSVG(title, muted, percent, options, L) {
 
   const bgIcon = (!showName && iconType && L.bgIcons[iconType]) ? L.bgIcons[iconType] : "";
 
-  const muteIcon = muted
-    ? `<g transform="${L.muteTransform}"><path d="M3 9v6h4l5 5V4L7 9H3z" fill="#fff"/><line x1="2" y1="2" x2="22" y2="22" stroke="#e33" stroke-width="3" stroke-linecap="round"/></g>`
+    const muteIcon = muted
+    ? `<line x1="10" y1="10" x2="${L.w - 10}" y2="${L.h - 10}" stroke="#e33" stroke-width="4" stroke-linecap="round"/>`
     : "";
 
   let textBlock = "";
