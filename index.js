@@ -574,8 +574,13 @@ function refreshVolume(ctx) {
     return;
   }
   if (ctx.short.startsWith("app")) {
-    if (!ctx.resolvedAppIds || ctx.resolvedAppIds.length === 0) return;
-    pipewire.getVolume(ctx.resolvedAppIds[0], (data) => updateDisplay(ctx, data));
+    resolveAppTargets(ctx, ctx.settings, (ids) => {
+      if (!ids || ids.length === 0) {
+        updateDisplay(ctx, null);
+        return;
+      }
+      pipewire.getVolume(ids[0], (data) => updateDisplay(ctx, data));
+    });
     return;
   }
   if (ctx.short.startsWith("output")) {
@@ -640,6 +645,23 @@ function resolveTarget(short, ctx, settings) {
   return null;
 }
 
+// Resolve app targets from stable appName whenever available.
+// This keeps app actions working after the app restarts and gets a new stream ID.
+function resolveAppTargets(ctx, settings, callback) {
+  const appName = (ctx && ctx.settings && ctx.settings.appName) || (settings && settings.appName);
+  if (appName) {
+    pipewire.resolveAppIds(appName, (ids) => {
+      const resolved = Array.isArray(ids) ? ids : [];
+      if (ctx) ctx.resolvedAppIds = resolved;
+      callback(resolved);
+    });
+    return;
+  }
+
+  const legacyId = (ctx && ctx.settings && ctx.settings.app) || (settings && settings.app);
+  callback(legacyId ? [legacyId] : []);
+}
+
 // --- Settings resolution ---
 function getSettings(context, payload) {
   return contexts.has(context)
@@ -663,10 +685,10 @@ function forEachTarget(ids, fn, afterAll) {
 function handleKeyDown(action, context, settings) {
   const ctx = contexts.get(context);
   const short = ctx ? ctx.short : action.replace(PREFIX, "");
-  const target = resolveTarget(short, ctx, settings);
   const cb = () => afterAction(context);
   const step = (settings && settings.volumeStep) || 5;
   const isApp = short.startsWith("app");
+  const target = resolveTarget(short, ctx, settings);
 
   switch (short) {
     case "volume":
@@ -676,7 +698,9 @@ function handleKeyDown(action, context, settings) {
     case "inputvolume": {
       if (settings && settings.direction === "mute") {
         if (isApp) {
-          forEachTarget(target, (id, done) => pipewire.nodeMute(id, done), cb);
+          resolveAppTargets(ctx, settings, (ids) => {
+            forEachTarget(ids, (id, done) => pipewire.nodeMute(id, done), cb);
+          });
         } else {
           pipewire.nodeMute(target, cb);
         }
@@ -684,7 +708,9 @@ function handleKeyDown(action, context, settings) {
         const dir = (settings && settings.direction === "down") ? "-" : "+";
         const change = `${dir}${step}%`;
         if (isApp) {
-          forEachTarget(target, (id, done) => pipewire.nodeVolume(id, change, done), cb);
+          resolveAppTargets(ctx, settings, (ids) => {
+            forEachTarget(ids, (id, done) => pipewire.nodeVolume(id, change, done), cb);
+          });
         } else {
           pipewire.nodeVolume(target, change, cb);
         }
@@ -697,7 +723,9 @@ function handleKeyDown(action, context, settings) {
     case "outputmute":
     case "inputmute":
       if (isApp) {
-        forEachTarget(target, (id, done) => pipewire.nodeMute(id, done), cb);
+        resolveAppTargets(ctx, settings, (ids) => {
+          forEachTarget(ids, (id, done) => pipewire.nodeMute(id, done), cb);
+        });
       } else {
         pipewire.nodeMute(target, cb);
       }
@@ -717,14 +745,16 @@ function handleDialRotate(action, context, settings, ticks) {
   const short = ctx ? ctx.short : action.replace(PREFIX, "");
   // No-op for switch actions
   if (short === "switchoutput" || short === "switchinput") return;
-  const target = resolveTarget(short, ctx, settings);
   const stepBase = (settings && settings.volumeStep) || 5;
   const step = Math.abs(ticks) * stepBase;
   const change = `${ticks > 0 ? "+" : "-"}${step}%`;
   const cb = () => afterAction(context);
   if (short.startsWith("app")) {
-    forEachTarget(target, (id, done) => pipewire.nodeVolume(id, change, done), cb);
+    resolveAppTargets(ctx, settings, (ids) => {
+      forEachTarget(ids, (id, done) => pipewire.nodeVolume(id, change, done), cb);
+    });
   } else {
+    const target = resolveTarget(short, ctx, settings);
     pipewire.nodeVolume(target, change, cb);
   }
 }
@@ -732,13 +762,16 @@ function handleDialRotate(action, context, settings, ticks) {
 function handleDialPress(action, context, settings) {
   const ctx = contexts.get(context);
   const short = ctx ? ctx.short : action.replace(PREFIX, "");
-  const target = resolveTarget(short, ctx, settings);
   const cb = () => afterAction(context);
   if (short === "switchoutput" || short === "switchinput") {
+    const target = resolveTarget(short, ctx, settings);
     pipewire.setDefault(target, cb);
   } else if (short.startsWith("app")) {
-    forEachTarget(target, (id, done) => pipewire.nodeMute(id, done), cb);
+    resolveAppTargets(ctx, settings, (ids) => {
+      forEachTarget(ids, (id, done) => pipewire.nodeMute(id, done), cb);
+    });
   } else {
+    const target = resolveTarget(short, ctx, settings);
     pipewire.nodeMute(target, cb);
   }
 }
