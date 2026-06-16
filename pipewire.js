@@ -14,18 +14,37 @@ function toWpctlVol(change) {
   return change;
 }
 
-// Get volume and mute status for a target (sink/source/node id)
+// Get volume and mute status for a target (sink/source/node id).
+// Concurrent calls for the same target are queued and share a single wpctl execution.
+const volumeQueue = new Map();
+
 function getVolume(target, callback) {
+  if (volumeQueue.has(target)) {
+    volumeQueue.get(target).push(callback);
+    return;
+  }
+
+  volumeQueue.set(target, [callback]);
+
   exec(`wpctl get-volume ${target}`, (err, stdout) => {
-    if (err) return callback(null);
+    const callbacks = volumeQueue.get(target);
+    volumeQueue.delete(target);
+
+    if (err || !stdout) {
+      for (const cb of callbacks) cb(null);
+      return;
+    }
 
     const volumeMatch = stdout.match(/Volume:\s([0-9.]+)/);
     const muteMatch = stdout.includes("[MUTED]");
 
-    if (!volumeMatch) return callback(null);
+    if (!volumeMatch) {
+      for (const cb of callbacks) cb(null);
+      return;
+    }
 
-    const percent = Math.round(parseFloat(volumeMatch[1]) * 100);
-    callback({ percent, muted: muteMatch });
+    const result = { percent: Math.round(parseFloat(volumeMatch[1]) * 100), muted: muteMatch };
+    for (const cb of callbacks) cb(result);
   });
 }
 
@@ -175,21 +194,38 @@ function setDefault(id, callback) {
 
 // --- wpctl inspect based lookups ---
 
-// Inspect a node and extract multiple properties in one call
+// Inspect a node and extract multiple properties in one call.
+// Concurrent calls for the same target are queued and share a single wpctl execution.
+const inspectQueue = new Map();
+
 function inspectNode(target, callback) {
+  if (inspectQueue.has(target)) {
+    inspectQueue.get(target).push(callback);
+    return;
+  }
+
+  inspectQueue.set(target, [callback]);
+
   exec(`wpctl inspect ${target}`, (err, stdout) => {
-    if (err) return callback(null);
+    const callbacks = inspectQueue.get(target);
+    inspectQueue.delete(target);
+
+    if (err || !stdout) {
+      for (const cb of callbacks) cb(null);
+      return;
+    }
 
     const nodeName = stdout.match(/node\.name\s*=\s*"(.+?)"/);
     const nick = stdout.match(/node\.nick\s*=\s*"(.+?)"/);
     const desc = stdout.match(/node\.description\s*=\s*"(.+?)"/);
     const appName = stdout.match(/application\.name\s*=\s*"(.+?)"/);
 
-    callback({
+    const result = {
       stableName: nodeName ? nodeName[1] : null,
       displayName: (nick && nick[1]) || (desc && desc[1]) || null,
       appName: (appName && appName[1]) || (nodeName && nodeName[1]) || null,
-    });
+    };
+    for (const cb of callbacks) cb(result);
   });
 }
 
