@@ -821,6 +821,17 @@ function startMonitor() {
 
 let shuttingDown = false;
 
+// When OpenDeck adds or removes an action it resets all button images.
+// Clear caches and re-send images for all existing contexts immediately.
+function fullRefresh() {
+  for (const key of contexts.keys()) {
+    lastImageCache.delete(key);
+    lastTitleCache.delete(key);
+    lastStateCache.delete(key);
+  }
+  refreshAllTitles();
+}
+
 function cleanup() {
   shuttingDown = true;
   if (monitor) {
@@ -860,6 +871,9 @@ ws.on("message", (raw) => {
       const { short, iconType } = actionMeta(action);
       contexts.set(context, { action, short, iconType, context, settings, controller });
       refreshTitle(contexts.get(context));
+      // OpenDeck resets all button images when a new action is added;
+      // re-send images for all other contexts immediately.
+      fullRefresh();
       break;
     }
 
@@ -868,6 +882,8 @@ ws.on("message", (raw) => {
       lastImageCache.delete(context);
       lastTitleCache.delete(context);
       lastStateCache.delete(context);
+      // OpenDeck resets all button images when an action is removed.
+      fullRefresh();
       break;
 
     case "keyDown": {
